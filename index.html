@@ -441,6 +441,7 @@ body.present .edit-only{display:none!important}
 <script id="revmap-assets" type="application/json">{}</script>
 <script src="config.js"></script>
 <script id="revmap-app">
+
 (function () {
 'use strict';
 
@@ -1218,6 +1219,7 @@ function applyFocus() {
     var ls = (m.dataset.l || '').split(' ');
     m.classList.toggle('in-chain', !!C && ls.some(function (x) { return C.links.has(x); }));
   });
+  if (typeof window.__revmapDecorate === 'function') { try { window.__revmapDecorate(); } catch (e) { /* comments hook */ } }
 }
 
 /* ---------------- wires ---------------- */
@@ -1648,6 +1650,7 @@ function renderInspector(focusField) {
   $$('[data-step-text]', el).forEach(autoGrow);
   var body = $('.insp-body', el); if (body && keepScroll && !focusField) body.scrollTop = keepScroll;
   if (focusField) { var f = $('[data-f="' + focusField + '"]', el); if (f) { f.focus(); if (f.select) f.select(); } }
+  if (typeof window.__revmapInspector === 'function') { try { window.__revmapInspector(el, id, t); } catch (e) { /* comments hook */ } }
 }
 function modKey() { return /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : 'Ctrl'; }
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
@@ -1884,7 +1887,7 @@ function openMenu(x, y) {
     '<div class="opt" data-m="history">历史版本…</div>' +
     '<div class="opt" data-m="help">使用说明</div>' +
     '<div class="opt" data-m="about">数据存在哪里</div>' +
-    '<div class="opt" data-m="new">新建空白项目</div></div>';
+    (window.REVMAP_CONFIG ? '' : '<div class="opt" data-m="new">新建空白项目</div>') + '</div>';
   var el = openPop(html, x, y, 'menu');
   el.addEventListener('click', function (e) {
     var o = e.target.closest('[data-m]'); if (!o) return; closePop();
@@ -2170,6 +2173,7 @@ function importText(text, fname) {
     } catch (e2) { data = null; }
   }
   if (!data || !data.meta || !Array.isArray(data.excerpts)) { toast('这个文件里没有修改地图的数据'); return; }
+  if (window.REVMAP_CONFIG && !confirm('打开的文件会替换在线地图的内容，并同步给所有合作者（可以撤销，也能在 GitHub 历史里找回）。确定继续？')) return;
   snapshot('打开 ' + (fname || '文件') + ' 之前');
   pushUndo();
   S.data = migrate(data); S.focus = null; S.editingResp = null; S.fileHandle = null; S.fileName = null; S.fileDirty = false;
@@ -2328,7 +2332,16 @@ function showHint() {
   scheduleWires();
 }
 function openAbout() {
-  var fs = !!window.showSaveFilePicker;
+  var fs = !!window.showSaveFilePicker, CF = window.REVMAP_CONFIG;
+  if (CF) {
+    modal('<h3>数据存在哪里</h3><div class="mb">' +
+      '<p><b>在线保存。</b>这张地图保存在 GitHub 私有仓库 <code>' + esc(CF.owner + '/' + CF.repo) + '</code> 里：<code>' + esc(CF.dataPath || 'data.json') + '</code> 是地图内容，<code>' + esc(CF.assetsPath || 'assets.json') + '</code> 是图片和附件，<code>' + esc(CF.commentsPath || 'comments.json') + '</code> 是评论。停止编辑几秒后自动同步；每次同步都是仓库里的一次提交，提交说明写着是谁改了哪几条。</p>' +
+      '<p><b>多人同时修改。</b>按“条目 + 字段”合并：不同的人改不同的条目或字段，两边都保留；同一字段被同时修改时保留后同步的版本，并会提示。</p>' +
+      '<p><b>修改记录和评论。</b>左下角的“评论”里可以看到全部评论和修改记录，每一条都署了名字。</p>' +
+      '<p><b>离线备份。</b>“保存”会下载一个包含全部数据和附件的 HTML 文件，双击就能离线打开。</p></div><div class="mf"><button class="btn primary" data-x="cancel">知道了</button></div>',
+      function (e, close) { if (e.target.closest('[data-x]')) close(); });
+    return;
+  }
   modal('<h3>数据存在哪里</h3><div class="mb">' +
     '<p><b>浏览器缓存。</b>每次修改后马上自动缓存在这台电脑的浏览器里，结果图存在浏览器的数据库里。关掉页面、断电之后重新打开这个文件，会提示恢复。换浏览器、清除浏览数据之后缓存就没有了。</p>' +
     '<p><b>历史版本。</b>编辑时每 5 分钟自动存一份，最多 ' + SNAP_KEEP + ' 份，在“更多 → 历史版本”里恢复。</p>' +
@@ -2669,7 +2682,29 @@ window.RevmapAPI = {
     } finally { S.cloudApplying = false; }
   },
   refreshStatus: function () { renderSaveState(); },
-  toast: function (m) { toast(m); }
+  toast: function (m, label, fn) { toast(m, label, fn); },
+  labelOf: function (id) {
+    var t = typeOf(id), o = getObj(id);
+    if (!t || !o) return null;
+    if (t === 'excerpt') { var r = IX.rv.get(o.reviewer); return { type: t, kind: '原文', label: (r ? r.short + '：' : '') + oneLine(o.text, 40), color: r ? r.color : '#5E6B78' }; }
+    if (t === 'issue') return { type: t, kind: '问题', label: o.kind === 'ok' ? '无需修改' : (o.code ? o.code + ' ' : '') + (o.title || '未命名问题'), color: o.kind === 'ok' ? '#8B97A2' : catOf(o).color };
+    if (t === 'solution') return { type: t, kind: '做法', label: o.title || '未命名做法', color: '#55626E' };
+    if (t === 'response') { var c = codesOf(issuesOfResponse(id)); return { type: t, kind: '回复', label: (c.length ? c.join(' ') + '：' : '') + (norm(o.text) ? oneLine(o.text, 40) : '（还没写）'), color: '#1F5FBF' }; }
+    return { type: t, kind: '审稿人', label: o.short + ' ' + o.name, color: o.color };
+  },
+  goto: function (id) {
+    if (!typeOf(id)) return false;
+    if (typeOf(id) === 'reviewer') return false;
+    var col = { excerpt: 'ex', issue: 'is', solution: 'so', response: 're' }[typeOf(id)];
+    if (col && isCollapsed(col)) toggleCol(col, false);
+    if (window.innerWidth <= 960 && col && S.tab !== col) { S.tab = col; render(); }
+    setFocus(id, { scroll: true, scrollSelf: true, animate: true });
+    return true;
+  },
+  getFocus: function () { return S.focus; },
+  mode: function () { return S.mode; },
+  redrawWires: function () { scheduleWires(); },
+  closeInspector: function () { closeInspector(); }
 };
 
 /* ---------------- boot ---------------- */
